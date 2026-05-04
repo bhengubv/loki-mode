@@ -9,6 +9,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.5.17] - 2026-05-04
+
+PATCH release. 7 bugs found via end-to-end testing of v7.5.16 against the real
+loki CLI (Bun route). Each bug was tasked individually under the one-agent-one-bug
+model, with 3 blind reviewers per fix (correctness + boundary + anti-fabrication).
+All 21 reviewers returned APPROVE unanimously.
+
+### Fixed
+
+- **BUG-001 since validation order** (`dashboard/server.py`). The `/api/council/transcripts`
+  endpoint short-circuited on missing transcripts dir BEFORE validating the `since`
+  query param, so `?since=garbage` returned 200 with empty list when no transcripts
+  on disk. Fix: move ISO8601 parsing to run before the missing-dir early return.
+- **BUG-002 Bun Python 3.12 micro version** (`loki-ts/src/commands/doctor.ts`). The
+  Bun-route Python 3.12 probe requested only `major.minor` and displayed `3.12`
+  instead of full `3.12.X`. Fix: probe also requests `micro`. Restores parity
+  with bash route which already shows `3.12.13`.
+- **BUG-003 iter_min negative values** (`dashboard/server.py`).
+  `?iter_min=-5` returned ALL records (no validation). Fix: add
+  `Query(default=None, ge=0)`. Now returns 422 on negative; positive and zero
+  still accepted.
+- **BUG-004 sentrux setup hint redirected to wrong subcommand** (`autonomy/loki`).
+  When sentrux binary not on PATH, `loki sentrux gate` said "Run 'loki sentrux
+  baseline' for setup hints" -- but baseline ALSO needs sentrux. Fix: every
+  not-installed branch now shows `brew install sentrux/tap/sentrux` + curl install
+  line + GitHub URL. `init-rules` correctly does NOT show install hint.
+- **BUG-005 bash transcript writer hardcoded threshold** (`autonomy/completion-council.sh`).
+  `council_write_transcript()` hardcoded `'threshold': 2` in its python3 heredoc
+  instead of reading the dynamic `effective_threshold` from `council_vote()` scope.
+  Fix: pass effective_threshold as 5th arg (default 0 backward-compat); 5 call
+  sites updated.
+- **BUG-006 single-record corrupt JSON returns 500 vs list skips** (`dashboard/server.py`).
+  List endpoint silently skipped corrupt JSON; single-record raised
+  HTTPException 500. Fix: single-record returns 410 Gone with detail naming the
+  iteration_id.
+- **BUG-007 latest_id KeyError on missing iteration_id** (`dashboard/server.py`).
+  `records[0]["iteration_id"]` could KeyError if a transcript shipped without the
+  field. Fix: per-file loop now skips records with missing or non-string
+  `iteration_id` (with logger.warning); return uses `.get()` defense-in-depth.
+
+### Verified locally
+
+- All 7 bug-fix test suites green (totals after merge: 17 dashboard pytest,
+  720 Bun, 200 bash council threshold, 155 sentrux setup hints, plus pre-existing).
+- `bash scripts/local-ci.sh` 21/21 PASS.
+- 21 blind reviewers (3 per fix x 7 fixes) all returned APPROVE; zero CONCERNs.
+- Bun dist rebuilt; bun-parity matrix passes.
+- 13 version files at 7.5.17 (vscode-extension intentionally skipped per
+  CLAUDE.md v7.2.0 deprecation).
+
+### Verified end-to-end on the real loki CLI before push
+
+- All 4 v7.5.14/15 sentrux features work after `bun install -g loki-mode@7.5.16`:
+  help, init-rules, doctor --json sentrux entry, web/dashboard help cross-refs.
+- `/api/council/transcripts` endpoint returns correct shape on empty + seeded
+  state; 404 on missing single record; 422 on bounds violations.
+- The 4 dashboard/server.py merges (BUG-001, 003, 006, 007) had one trivial
+  conflict in the test file (different methods at same line); resolved by
+  keeping both methods.
+
+### NOT in this release (honest list)
+
+- Dashboard panel visual smoke (Dev C couldn't browser-test); covered indirectly
+  by the new component being present in `dashboard/static/index.html`.
+- Real-PRD end-to-end exercise of the v7.5.16 council writer (would burn
+  provider credits); only synthetic transcripts have been written via the
+  test harness.
+- The 3 retrospective docs (audit, postmortem, failure-modes) still pending
+  unanimous reviewer approval; will ship in a separate retro bundle.
+
+### Migration / rollback
+
+No migration. Each fix is additive or strict bug correction. Rollback:
+`npm install -g loki-mode@7.5.16`. No state migrations.
+
 ## [7.5.16] - 2026-05-04
 
 PATCH release. Adds council transcript persistence across both bash and Bun council paths, a REST API to query transcripts, and a live dashboard panel. Motivation: YC demo readiness -- a partner clicking through the dashboard can now see the full multi-reviewer council record (who voted what, whether the devil's advocate triggered, and whether it flipped the outcome) without digging into raw log files.
