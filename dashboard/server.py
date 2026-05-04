@@ -5955,6 +5955,68 @@ async def get_findings(iteration: int):
                         detail=f"No findings for iteration {iteration}")
 
 
+@app.get("/api/quality/architecture")
+async def get_quality_architecture():
+    """Return the sentrux architectural-drift series.
+
+    Globs `.loki/state/findings-sentrux-*.json` (written by the iteration
+    loop when LOKI_SENTRUX_GATE=1), sorts by iteration ascending, and
+    returns a series suitable for plotting drift over time.
+
+    Per-file JSON parse errors are logged and skipped; the endpoint stays
+    200 OK even when no files exist or every file is corrupt.
+    """
+    base = _get_loki_dir()
+    state_dir = base / "state"
+    series: list[dict[str, Any]] = []
+    if state_dir.exists():
+        try:
+            paths = list(state_dir.glob("findings-sentrux-*.json"))
+        except OSError as exc:
+            logger.warning("sentrux: failed to glob %s: %s", state_dir, exc)
+            paths = []
+        for path in paths:
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+                data = json.loads(text)
+            except (OSError, IOError) as exc:
+                logger.warning("sentrux: skipping unreadable %s: %s",
+                               path.name, exc)
+                continue
+            except json.JSONDecodeError as exc:
+                logger.warning("sentrux: skipping corrupt JSON %s: %s",
+                               path.name, exc)
+                continue
+            if not isinstance(data, dict):
+                logger.warning("sentrux: skipping non-object payload in %s",
+                               path.name)
+                continue
+            try:
+                iteration = int(data.get("iteration"))
+                before = int(data.get("before"))
+                after = int(data.get("after"))
+            except (TypeError, ValueError) as exc:
+                logger.warning("sentrux: skipping %s, bad ints: %s",
+                               path.name, exc)
+                continue
+            verdict = data.get("verdict")
+            if verdict not in ("DEGRADED", "OK", "UNKNOWN"):
+                verdict = "UNKNOWN"
+            timestamp = data.get("timestamp")
+            if not isinstance(timestamp, str):
+                timestamp = ""
+            series.append({
+                "iteration": iteration,
+                "before": before,
+                "after": after,
+                "verdict": verdict,
+                "timestamp": timestamp,
+            })
+    series.sort(key=lambda e: e["iteration"])
+    current = series[-1]["after"] if series else None
+    return {"series": series, "current": current, "samples": len(series)}
+
+
 @app.get("/api/learnings")
 async def get_learnings(limit: int = 50):
     """Read recent learnings (newest first)."""
