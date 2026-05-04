@@ -9,6 +9,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (none)
 
+## [7.5.14] - 2026-05-03
+
+MINOR release. Adds an optional, opt-in architectural-drift gate that wraps
+the external `sentrux` Rust CLI (https://github.com/sentrux/sentrux). Zero
+behavior change for users who do not install sentrux; zero touch to the
+iteration hot path in this release.
+
+### Why
+
+Loki's existing 11 quality gates and 3-reviewer council catch correctness
+and behavioral regressions, but no current gate produces a deterministic
+per-iteration architectural-drift number. sentrux scores codebase structure
+(modularity, acyclicity, depth, equality, redundancy) into one 0-10000
+signal with a `gate --save` baseline plus `gate` compare workflow. We do
+not bundle the binary, do not auto-install, and do not modify the iteration
+loop in this release. Users opt in via the new `loki sentrux` subcommand
+and a `loki doctor` line that reports presence.
+
+### Added
+
+- **autonomy/lib/sentrux-gate.sh** (new helper, ~150 LOC).
+  Public functions: `sentrux_available`, `sentrux_version`,
+  `sentrux_baseline_save`, `sentrux_baseline_quality`, `sentrux_gate_diff`.
+  Reads `.sentrux/baseline.json` directly via python3 (already a hard
+  Loki dependency) and parses `sentrux gate` stdout. Defensive against the
+  inconsistent v0.5.7 exit code on DEGRADED -- helper relies on text parse,
+  not exit status.
+- **autonomy/loki: cmd_sentrux**. New subcommand `loki sentrux baseline|gate|status|help`.
+  - `baseline [<path>]`: writes `<path>/.sentrux/baseline.json`.
+  - `gate [<path>]`: parses verdict (OK/DEGRADED/UNKNOWN), exits 1 on DEGRADED,
+    2 on UNKNOWN or when sentrux is unavailable.
+  - `status [<path>]`: prints version + baseline quality.
+  Subcommand wired into the dispatch table next to `doctor`.
+- **autonomy/loki: cmd_doctor sentrux check**. One line in the optional-services
+  section reports `sentrux <version>` (PASS) or "not installed" (WARN). Mirrors
+  the existing ChromaDB and MiroFish optional-service entries. JSON output
+  unchanged (consistent with how ChromaDB/MiroFish are handled).
+- **tests/test-sentrux-gate.sh** (new). 15 unit assertions exercising every
+  parser + JSON-reader path: missing binary, missing baseline, malformed JSON,
+  missing `quality_signal` field, OK verdict, DEGRADED verdict despite non-zero
+  exit code, empty stdout, output without a Quality line. Uses a fake on-PATH
+  `sentrux` binary so the test runs anywhere.
+- **tests/integration/test_sentrux_real.sh** (new). 6 assertions against the
+  REAL sentrux binary on a synthesized degradation fixture. Skips cleanly with
+  PASS when sentrux is not on PATH (matches opt-in posture).
+
+### Verified locally
+
+- `bash tests/test-sentrux-gate.sh` -- 15/15 PASS.
+- `bash tests/integration/test_sentrux_real.sh` -- 6/6 PASS with sentrux
+  v0.5.7 on PATH; 1/1 PASS (graceful skip) without.
+- `bash autonomy/loki sentrux help|status|baseline|gate <fixture>` --
+  exercised end-to-end against /tmp fixtures, exit codes verified
+  (0 OK, 1 DEGRADED, 2 unavailable/UNKNOWN).
+- `bash autonomy/loki doctor` -- sentrux line renders correctly with and
+  without the binary on PATH.
+- `bash -n` + `shellcheck -S error` clean on the helper, the subcommand
+  block, both new tests, and `autonomy/loki` as a whole.
+
+### NOT tested in this release (honest list)
+
+- Iteration-loop integration. The helper is NOT wired into
+  `run_autonomous()` in this release. Doing so safely requires a real-PRD
+  smoke test (provider credits + 5+ minute wall-clock), which is out of
+  scope for this patch. Tracked for v7.5.15+.
+- Bun route. The helper and subcommand are bash-only in v7.5.14.
+  `LOKI_LEGACY_BASH=0` users see the same behavior because dispatch is in
+  `autonomy/loki` which both routes share.
+- Real `loki start <prd>` end-to-end. The new subcommand is standalone;
+  it does not interact with any existing iteration code path.
+- Multi-language coverage at scale. sentrux supports 52 languages via
+  tree-sitter; we exercised TypeScript only in the integration fixture.
+- MCP server integration. sentrux exposes 9 MCP tools; none are wired
+  into Loki's MCP server. Deferred.
+- Linux. Binary tested on darwin-arm64 only (the dev machine). The CI
+  matrix runs on linux-x86_64 and will surface any platform-specific
+  parsing issues against the fake binary used in the unit test.
+
+### Migration / rollback
+
+No migration required. Users without sentrux installed see one new WARN
+line in `loki doctor` (mirroring how ChromaDB/MiroFish are reported). To
+opt in, install sentrux via `brew install sentrux/tap/sentrux` or the
+upstream curl installer, then run `loki sentrux baseline` in any project.
+
+To roll back: `npm install -g loki-mode@7.5.13`. No state migrations.
+
 ## [7.5.13] - 2026-04-29
 
 PATCH release. Test-suite fix-up. v7.5.12 published successfully to

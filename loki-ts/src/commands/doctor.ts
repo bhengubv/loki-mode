@@ -523,6 +523,28 @@ async function runText(): Promise<number> {
     );
     tally.warn++;
   }
+  // sentrux check (v7.5.14, optional architectural-drift gate). Mirrors the
+  // bash-route line at autonomy/loki:cmd_doctor so the bun-parity matrix
+  // diff stays empty.
+  if (await commandExists("sentrux")) {
+    let sentruxVer = "unknown";
+    try {
+      const r = await run(["sentrux", "--version"], { timeoutMs: 2000 });
+      const tok = r.stdout.split(/\s+/).filter(Boolean).pop();
+      if (tok) sentruxVer = tok.replace(/^v/, "");
+    } catch {
+      /* keep "unknown" */
+    }
+    process.stdout.write(
+      `  ${badge("pass")}  sentrux ${sentruxVer} (architectural drift gate: loki sentrux help)\n`,
+    );
+    tally.pass++;
+  } else {
+    process.stdout.write(
+      `  ${badge("warn")}  sentrux - not installed (optional, brew install sentrux/tap/sentrux)\n`,
+    );
+    tally.warn++;
+  }
   process.stdout.write(`\n`);
 
   // System

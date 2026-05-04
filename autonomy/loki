@@ -6795,6 +6795,16 @@ cmd_doctor() {
         echo -e "  ${YELLOW}WARN${NC}  OTEL - not configured (set LOKI_OTEL_ENDPOINT)"
         warn_count=$((warn_count + 1))
     fi
+    # sentrux check (v7.5.14, optional architectural-drift gate)
+    if command -v sentrux &>/dev/null; then
+        local _sentrux_ver
+        _sentrux_ver=$(sentrux --version 2>/dev/null | head -1 | awk '{print $NF}')
+        echo -e "  ${GREEN}PASS${NC}  sentrux ${_sentrux_ver:-unknown} (architectural drift gate: loki sentrux help)"
+        pass_count=$((pass_count + 1))
+    else
+        echo -e "  ${YELLOW}WARN${NC}  sentrux - not installed (optional, brew install sentrux/tap/sentrux)"
+        warn_count=$((warn_count + 1))
+    fi
     echo ""
 
     echo -e "${CYAN}System:${NC}"
@@ -6975,6 +6985,126 @@ result = {
 
 print(json.dumps(result, indent=2))
 "
+}
+
+# Architectural-drift gate (v7.5.14, opt-in).
+#
+# Wraps the external sentrux Rust binary -- https://github.com/sentrux/sentrux --
+# to give users a deterministic per-iteration architecture-drift signal that
+# complements the existing 11 quality gates and 3-reviewer council. This is a
+# manual subcommand only in v7.5.14; iteration-loop integration is deferred
+# pending a real-PRD smoke test (tracked in CHANGELOG).
+#
+# Subcommands:
+#   loki sentrux baseline [<path>]   -- save .sentrux/baseline.json
+#   loki sentrux gate     [<path>]   -- compare current vs baseline
+#   loki sentrux status   [<path>]   -- print current baseline + verdict
+#
+# Default path is the current working directory.
+cmd_sentrux() {
+    # shellcheck source=autonomy/lib/sentrux-gate.sh
+    if ! source "$_LOKI_SCRIPT_DIR/lib/sentrux-gate.sh" 2>/dev/null \
+       && ! source "$(dirname "$0")/lib/sentrux-gate.sh" 2>/dev/null; then
+        echo -e "${RED}sentrux helper missing -- expected at autonomy/lib/sentrux-gate.sh${NC}" >&2
+        return 1
+    fi
+
+    local sub="${1:-help}"
+    if [ "$#" -gt 0 ]; then shift; fi
+    local target="${1:-.}"
+
+    case "$sub" in
+        baseline)
+            if ! sentrux_available; then
+                echo -e "${YELLOW}sentrux not installed.${NC} Install via:" >&2
+                echo "  brew install sentrux/tap/sentrux" >&2
+                echo "  or download from https://github.com/sentrux/sentrux/releases" >&2
+                return 2
+            fi
+            if sentrux_baseline_save "$target"; then
+                local q
+                q=$(sentrux_baseline_quality "$target" || echo "?")
+                echo -e "${GREEN}Baseline saved.${NC} Quality: $q (path: $target)"
+                return 0
+            fi
+            echo -e "${RED}Failed to save baseline.${NC}" >&2
+            return 1
+            ;;
+        gate)
+            if ! sentrux_available; then
+                echo -e "${YELLOW}sentrux not installed.${NC} Run 'loki sentrux baseline' for setup hints." >&2
+                return 2
+            fi
+            local diff verdict before after
+            diff=$(sentrux_gate_diff "$target")
+            verdict=$(printf '%s' "$diff" | awk -F'|' '{print $3}')
+            before=$(printf '%s' "$diff" | awk -F'|' '{print $1}')
+            after=$(printf '%s' "$diff" | awk -F'|' '{print $2}')
+            case "$verdict" in
+                OK)
+                    echo -e "${GREEN}OK${NC}  Quality: $before -> $after (no degradation)"
+                    return 0
+                    ;;
+                DEGRADED)
+                    echo -e "${RED}DEGRADED${NC}  Quality: $before -> $after"
+                    echo "  Architecture regressed since the saved baseline."
+                    echo "  Inspect with: sentrux scan $target"
+                    return 1
+                    ;;
+                *)
+                    echo -e "${YELLOW}UNKNOWN${NC}  Could not parse sentrux output."
+                    echo "  Try: sentrux gate --save $target  (to refresh baseline)"
+                    return 2
+                    ;;
+            esac
+            ;;
+        status)
+            if ! sentrux_available; then
+                echo "sentrux: not installed (optional)"
+                echo "install: brew install sentrux/tap/sentrux"
+                return 0
+            fi
+            local v
+            v=$(sentrux_version || echo "unknown")
+            echo "sentrux: v$v"
+            local q
+            if q=$(sentrux_baseline_quality "$target"); then
+                echo "baseline ($target): quality=$q"
+            else
+                echo "baseline ($target): not saved (run: loki sentrux baseline $target)"
+            fi
+            return 0
+            ;;
+        help|--help|-h|"")
+            echo -e "${BOLD}loki sentrux${NC} - Architectural drift gate (opt-in, requires sentrux binary)"
+            echo ""
+            echo "Usage:"
+            echo "  loki sentrux baseline [<path>]   Save current architecture as baseline"
+            echo "  loki sentrux gate     [<path>]   Compare current vs baseline (exit 1 on DEGRADED)"
+            echo "  loki sentrux status   [<path>]   Show binary version + saved baseline quality"
+            echo ""
+            echo "Default path is the current directory."
+            echo ""
+            echo "About:"
+            echo "  Wraps the sentrux CLI (https://github.com/sentrux/sentrux), a Rust tool that"
+            echo "  scores codebase structure into a single 0-10000 quality signal. Useful as a"
+            echo "  supplement to Loki's existing 11 quality gates when you want an objective"
+            echo "  per-iteration architectural-drift number."
+            echo ""
+            echo "  Iteration-loop auto-gating is planned for a future release; for now this"
+            echo "  subcommand is the manual integration surface."
+            echo ""
+            echo "Install sentrux:"
+            echo "  brew install sentrux/tap/sentrux"
+            echo "  curl -fsSL https://raw.githubusercontent.com/sentrux/sentrux/main/install.sh | sh"
+            return 0
+            ;;
+        *)
+            echo -e "${RED}Unknown subcommand: $sub${NC}" >&2
+            echo "Run 'loki sentrux help' for usage." >&2
+            return 1
+            ;;
+    esac
 }
 
 # Show version
@@ -11973,6 +12103,9 @@ main() {
             ;;
         doctor)
             cmd_doctor "$@"
+            ;;
+        sentrux)
+            cmd_sentrux "$@"
             ;;
         setup-skill)
             cmd_setup_skill "$@"
