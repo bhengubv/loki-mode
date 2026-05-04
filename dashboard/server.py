@@ -3786,7 +3786,7 @@ async def force_council_review():
 async def get_council_transcripts(
     limit: int = Query(default=20, ge=1, le=200),
     since: Optional[str] = Query(default=None),
-    iter_min: Optional[int] = Query(default=None),
+    iter_min: Optional[int] = Query(default=None, ge=0),
 ):
     """List council transcript records, sorted descending by iteration number.
 
