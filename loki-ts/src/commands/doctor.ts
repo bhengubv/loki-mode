@@ -640,7 +640,7 @@ async function runText(): Promise<number> {
   // explicitly here. Informational only -- does NOT contribute to the count.
   const py = await findPython3();
   if (py !== null) {
-    const verRes = await run([py, "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"], { timeoutMs: 5000 });
+    const verRes = await run([py, "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')"], { timeoutMs: 5000 });
     const ver = verRes.stdout.trim();
     if (ver.startsWith("3.12")) {
       process.stdout.write(`  ${badge("pass")}  Python 3.12 (chromadb / sentence-transformers): ${ver} at ${py}\n`);
