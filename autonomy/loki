@@ -7011,7 +7011,18 @@ cmd_sentrux() {
 
     local sub="${1:-help}"
     if [ "$#" -gt 0 ]; then shift; fi
-    local target="${1:-.}"
+
+    # Parse --force flag (used by init-rules); collect remaining args into target.
+    local force=0
+    local positional=()
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --force|-f) force=1; shift ;;
+            --) shift; while [ "$#" -gt 0 ]; do positional+=("$1"); shift; done ;;
+            *) positional+=("$1"); shift ;;
+        esac
+    done
+    local target="${positional[0]:-.}"
 
     case "$sub" in
         baseline)
@@ -7075,13 +7086,75 @@ cmd_sentrux() {
             fi
             return 0
             ;;
+        init-rules)
+            # Scaffold a conservative default .sentrux/rules.toml in <target>/.sentrux/.
+            # Does not require sentrux binary -- the file is plain text.
+            local rules_dir="$target/.sentrux"
+            local rules_file="$rules_dir/rules.toml"
+            local abs_path
+            if [ -e "$rules_file" ] && [ "$force" -ne 1 ]; then
+                echo -e "${YELLOW}Refusing to overwrite existing $rules_file${NC}" >&2
+                echo "  Re-run with --force to replace it." >&2
+                return 1
+            fi
+            if ! mkdir -p "$rules_dir" 2>/dev/null; then
+                echo -e "${RED}Failed to create $rules_dir${NC}" >&2
+                return 2
+            fi
+            if ! cat > "$rules_file" <<'SENTRUX_RULES_EOF'
+# Sentrux architectural rules scaffolded by `loki sentrux init-rules` (Loki Mode v7.5.15).
+# Conservative defaults -- tighten per-project as needed.
+# See https://github.com/sentrux/sentrux for full spec.
+
+[constraints]
+# Block any iteration that introduces an import cycle.
+max_cycles = 0
+# Block files that grow into "god files" (very high churn + many dependents).
+no_god_files = true
+# Cap cyclomatic complexity per function (sentrux default is liberal).
+max_cc = 30
+
+# Layer enforcement is project-specific. Uncomment + edit when you know the
+# layout you want enforced. Example for a typical app:
+#
+# [[layers]]
+# name = "core"
+# paths = ["src/core/*"]
+# order = 0
+#
+# [[layers]]
+# name = "app"
+# paths = ["src/app/*"]
+# order = 2
+#
+# [[boundaries]]
+# from = "src/app/*"
+# to = "src/core/internal/*"
+# reason = "app must not depend on core internals"
+SENTRUX_RULES_EOF
+            then
+                echo -e "${RED}Failed to write $rules_file${NC}" >&2
+                return 2
+            fi
+            # Resolve absolute path for friendly output (portable across macOS/Linux).
+            if command -v python3 >/dev/null 2>&1; then
+                abs_path=$(python3 -c "import os,sys; print(os.path.abspath(sys.argv[1]))" "$rules_file" 2>/dev/null || echo "$rules_file")
+            else
+                abs_path=$(cd "$(dirname "$rules_file")" 2>/dev/null && pwd)/$(basename "$rules_file")
+            fi
+            echo -e "${GREEN}Wrote $abs_path${NC}"
+            echo "Edit it to add layer/boundary rules, then run: loki sentrux baseline $target"
+            return 0
+            ;;
         help|--help|-h|"")
             echo -e "${BOLD}loki sentrux${NC} - Architectural drift gate (opt-in, requires sentrux binary)"
             echo ""
             echo "Usage:"
-            echo "  loki sentrux baseline [<path>]   Save current architecture as baseline"
-            echo "  loki sentrux gate     [<path>]   Compare current vs baseline (exit 1 on DEGRADED)"
-            echo "  loki sentrux status   [<path>]   Show binary version + saved baseline quality"
+            echo "  loki sentrux baseline   [<path>]         Save current architecture as baseline"
+            echo "  loki sentrux gate       [<path>]         Compare current vs baseline (exit 1 on DEGRADED)"
+            echo "  loki sentrux status     [<path>]         Show binary version + saved baseline quality"
+            echo "  loki sentrux init-rules [<path>] [--force]"
+            echo "                                           Scaffold a default .sentrux/rules.toml"
             echo ""
             echo "Default path is the current directory."
             echo ""
