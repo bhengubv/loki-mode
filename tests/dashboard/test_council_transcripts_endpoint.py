@@ -314,6 +314,40 @@ class CouncilTranscriptsEndpointTests(unittest.TestCase):
             self.assertEqual(body["total"], 0)
             self.assertIsNone(body["latest_id"])
 
+    # --- BUG-003: iter_min must reject negative values with 422 ------------------
+
+    def test_iter_min_rejects_negative(self):
+        """BUG-003: negative iter_min must return 422, not silently return all records."""
+        with _ForceLokiDir(self.tmp):
+            client = self._client()
+
+            # Negative value: FastAPI ge=0 constraint rejects with 422.
+            resp = client.get("/api/council/transcripts", params={"iter_min": -5})
+            self.assertEqual(
+                resp.status_code,
+                422,
+                msg=f"Expected 422 for iter_min=-5, got {resp.status_code}: {resp.text}",
+            )
+
+            # Zero is the lower bound: must be accepted (200).
+            resp = client.get("/api/council/transcripts", params={"iter_min": 0})
+            self.assertEqual(
+                resp.status_code,
+                200,
+                msg=f"Expected 200 for iter_min=0, got {resp.status_code}",
+            )
+
+            # Positive value with no matching records: 200 with empty list.
+            resp = client.get("/api/council/transcripts", params={"iter_min": 999})
+            self.assertEqual(
+                resp.status_code,
+                200,
+                msg=f"Expected 200 for iter_min=999, got {resp.status_code}",
+            )
+            body = resp.json()
+            self.assertEqual(body["transcripts"], [])
+            self.assertEqual(body["total"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
