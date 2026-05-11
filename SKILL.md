@@ -5,7 +5,13 @@ description: Multi-agent autonomous startup system for Claude Code. Triggers on 
 
 # Loki Mode - Multi-Agent Autonomous Startup System
 
-> **Version 2.18.0** | PRD → Production | Zero Human Intervention
+> **Version 2.18.4** | PRD → Production | Zero Human Intervention
+
+> **Install (bhengubv fork — includes BhenguAI parallel-agent fixes):**
+> ```bash
+> rm -rf ~/.claude/skills/loki-mode
+> git clone https://github.com/bhengubv/loki-mode.git ~/.claude/skills/loki-mode
+> ```
 
 ---
 
