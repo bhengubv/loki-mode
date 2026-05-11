@@ -155,6 +155,63 @@ for test_file in test_files:
 | **Tests failing after merge** | Skipped quality gates | Never bypass Severity-Based Blocking (lines 221-223) |
 | **Can't find what to do** | Not following decision tree | Use Decision Tree above, check phase in orchestrator.json |
 | **Memory/context growing** | Not using ledgers | Write to ledgers after completing tasks (lines 1649-1675) |
+| **dotnet test hangs silently** | vstest connection timeout not set | Add `bhengu.runsettings` with `<TestSessionTimeout>180000</TestSessionTimeout>` and reference it in the .csproj via `<RunSettingsFilePath>` — never rely on env var |
+| **Parallel agent stalls mid-task** | Two agents editing the same shared file simultaneously | Apply File Ownership Rule: one agent per shared file. Shared files = *.csproj, *.sln, ButlerOptions.cs-equivalent config bags, test project files |
+| **Agent wrote files but no completion** | Stuck in test run after writing, no progress log | Always write `.loki/progress/{track}.log` checkpoints; use Monitor tool to watch for stalls |
+
+---
+
+### Parallel Agent Safety Rules (learned from BhenguAI Session 2026-05-11)
+
+**The two failure modes that silently kill background agents:**
+
+**1. Test runner timeout**
+When `dotnet test` (vstest) hangs, the agent waits forever with no output.
+- ✅ **Fix**: Create a `.runsettings` file in the test project — timeout is baked in, no env var needed on any machine:
+  ```xml
+  <RunSettings>
+    <RunConfiguration>
+      <TestSessionTimeout>180000</TestSessionTimeout>
+    </RunConfiguration>
+  </RunSettings>
+  ```
+  Reference it in the `.csproj`: `<RunSettingsFilePath>$(MSBuildThisFileDirectory)my.runsettings</RunSettingsFilePath>`
+- Apply this to every new test project on every repo.
+
+**2. Shared file ownership conflicts**
+When two parallel agents both need to edit the same file, the second agent hits "file modified since read" and stalls.
+
+**File Ownership Rule**: Never assign two parallel agents work that requires editing the same file.
+
+| Always exclusive — one agent at a time |
+|----------------------------------------|
+| Project config bags (e.g. `ButlerOptions.cs`, `appsettings.json`) |
+| `*.csproj` / `*.sln` / `package.json` / `Cargo.toml` |
+| Shared service files (`ButlerService.cs`, `Program.cs`, `Startup.cs`) |
+| Test project files (`*.Tests.csproj`) |
+
+**Safe pattern** — agents own separate directories:
+```
+Agent A → src/Bhengu.AI.Voice/     (new files only)
+Agent B → src/Bhengu.AI.Memory/    (new files only)
+Agent C → src/Bhengu.AI.Tools/     (new files only)
+```
+
+**Unsafe pattern** — shared file collision:
+```
+Agent A → modifies ButlerOptions.cs   ← COLLISION
+Agent B → also modifies ButlerOptions.cs
+```
+**Solution**: Give ONE agent ownership of the shared file; others skip it and document "wire-up pending".
+
+**3. Progress visibility**
+Agents run blind — no real-time logs. Always include this in every parallel agent prompt:
+```
+After every major step, append one line to .loki/progress/{track-name}.log:
+  [HH:mm:ss] STEP: {what you just did}
+Final line: [HH:mm:ss] DONE: {summary} | Tests: N passed
+```
+Then use the Monitor tool to watch `.loki/progress/` for stalls.
 
 ---
 
